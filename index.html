@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pure Database Chat</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+        body { display: flex; flex-direction: column; height: 100vh; background-color: #e5ddd5; }
+        header { background-color: #075e54; color: white; padding: 15px; font-size: 20px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+        #chat-box { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .message { max-width: 75%; padding: 8px 12px; border-radius: 8px; font-size: 16px; word-wrap: break-word; display: flex; flex-direction: column; position: relative; }
+        .sent { background-color: #dcf8c6; align-self: flex-end; }
+        .received { background-color: white; align-self: flex-start; }
+        .msg-meta { font-size: 11px; color: #666; margin-bottom: 4px; font-weight: bold; }
+        .chat-img { max-width: 100%; border-radius: 5px; margin-top: 5px; max-height: 250px; object-fit: cover; cursor: pointer; }
+        .msg-time { font-size: 10px; color: #888; align-self: flex-end; margin-top: 4px; }
+        .input-area { display: flex; align-items: center; padding: 10px; background-color: #f0f0f0; gap: 8px; }
+        input[type="text"] { flex: 1; padding: 12px; border: 1px solid #ccc; border-radius: 24px; outline: none; font-size: 16px; }
+        .icon-btn { background-color: #128c7e; color: white; border: none; padding: 10px; border-radius: 50%; cursor: pointer; font-size: 18px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; }
+        #camera-input { display: none; }
+        .loading { font-size: 12px; color: #fff; font-style: italic; background: rgba(0,0,0,0.2); padding: 4px 8px; border-radius: 10px; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <span>Instant Photo Chat</span>
+        <span id="upload-status" class="loading" style="display:none;">Processing Photo...</span>
+    </header>
+    
+    <div id="chat-box"></div>
+    
+    <div class="input-area">
+        <label for="camera-input" class="icon-btn">📸</label>
+        <input type="file" id="camera-input" accept="image/*" capture="environment">
+        
+        <input type="text" id="msg-input" placeholder="Type a message...">
+        <button id="send-btn" class="icon-btn">➤</button>
+    </div>
+    <script>
+        // ✅ Sirf aur sirf aapka Firebase DB URL use ho raha hai
+        const FIEBASE_DB_URL = "https://firebasedatabase.app";
+        const FIREBASE_DB_URL = "https://shemacc-3ccac-default-rtdb.asia-southeast1.firebasedatabase.app/";
+
+        const currentUser = "User_" + Math.floor(Math.random() * 1000);
+
+        const chatBox = document.getElementById('chat-box');
+        const msgInput = document.getElementById('msg-input');
+        const sendBtn = document.getElementById('send-btn');
+        const cameraInput = document.getElementById('camera-input');
+        const uploadStatus = document.getElementById('upload-status');
+
+        // 🛠️ Image ko compress karke direct Base64 string (Text) mein badalne ka function
+        function compressAndGetBase64(file) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+                        
+                        // DB string limit ke liye size chhota (Max 500px) rakh rahe hain
+                        const maxDim = 500; 
+
+                        if (width > maxDim || height > maxDim) {
+                            if (width > height) {
+                                height *= maxDim / width;
+                                width = maxDim;
+                            } else {
+                                width *= maxDim / height;
+                                height = maxDim;
+                            }
+                        }
+
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+
+                        // 0.5 = 50% JPEG quality compression taaki text data chhota rahe
+                        const base64Data = canvas.toDataURL('image/jpeg', 0.5); 
+                        resolve(base64Data);
+                    };
+                };
+            });
+        }
+
+        // 💾 Database me message aur base64 image save karne ka function
+        async function sendMessage(imageBase64 = null) {
+            const text = msgInput.value.trim();
+            if (!text && !imageBase64) return;
+
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            const messageData = {
+                sender: currentUser,
+                text: text,
+                image: imageBase64, // Yeh direct base64 text database mein jayega
+                time: timeStr,
+                timestamp: Date.now()
+            };
+
+            try {
+                await fetch(FIREBASE_DB_URL, {
+                    method: 'POST',
+                    body: JSON.stringify(messageData),
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                msgInput.value = '';
+                loadMessages();
+            } catch (error) {
+                console.error("DB Error:", error);
+            }
+        }
+
+        // 🔄 Messages Read karne ka function
+        async function loadMessages() {
+            try {
+                const response = await fetch(FIREBASE_DB_URL);
+                const data = await response.json();
+                
+                chatBox.innerHTML = ''; 
+                
+                if (data) {
+                    Object.keys(data).forEach(key => {
+                        const msg = data[key];
+                        const msgDiv = document.createElement('div');
+                        msgDiv.classList.add('message');
+                        msgDiv.classList.add(msg.sender === currentUser ? 'sent' : 'received');
+                        
+                        const metaDiv = document.createElement('div');
+                        metaDiv.classList.add('msg-meta');
+                        metaDiv.textContent = msg.sender;
+                        msgDiv.appendChild(metaDiv);
+
+                        if (msg.image) {
+                            const img = document.createElement('img');
+                            img.src = msg.image; // Base64 string direct src mein read ho jati hai
+                            img.classList.add('chat-img');
+                            img.onclick = () => {
+                                const newTab = window.open();
+                                newTab.document.body.innerHTML = `<img src="${msg.image}" style="max-width:100%;">`;
+                            };
+                            msgDiv.appendChild(img);
+                        }
+
+                        if (msg.text) {
+                            const textSpan = document.createElement('span');
+                            textSpan.textContent = msg.text;
+                            msgDiv.appendChild(textSpan);
+                        }
+
+                        const timeDiv = document.createElement('div');
+                        timeDiv.classList.add('msg-time');
+                        timeDiv.textContent = msg.time || '';
+                        msgDiv.appendChild(timeDiv);
+                        
+                        chatBox.appendChild(msgDiv);
+                    });
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                }
+            } catch (error) {
+                console.error("Load Error:", error);
+            }
+        }
+
+        // 📸 Camera Trigger Event
+        cameraInput.addEventListener('change', async (e) => {
+            if (e.target.files.length === 0) return;
+            uploadStatus.style.display = "inline";
+            
+            const file = e.target.files[0];
+            
+            // Image ko compress karke string banaya
+            const base64Str = await compressAndGetBase64(file);
+            
+            // Direct database mein push kiya
+            await sendMessage(base64Str);
+            
+            uploadStatus.style.display = "none";
+            cameraInput.value = ''; 
+        });
+
+        sendBtn.addEventListener('click', () => sendMessage());
+        msgInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
+
+        setInterval(loadMessages, 3000);
+        loadMessages();
+    </script>
+</body>
+</html>
